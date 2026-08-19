@@ -1,0 +1,19 @@
+# Data terbatas dan turunannya: JANGAN dikomit
+*.parquet
+*.sav
+*.dta
+
+output_harmonisasi/*
+!output_harmonisasi/.gitkeep
+!output_harmonisasi/README.md
+
+output_p1/*
+!output_p1/.gitkeep
+!output_p1/README.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
