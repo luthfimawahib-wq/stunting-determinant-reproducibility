@@ -12,7 +12,7 @@ date-released: "2026-08-16"
 license: MIT
 identifiers:
   - type: doi
-    value: 10.5281/zenodo.XXXXXXX
+    value: 10.5281/zenodo.22015180
 url: "https://github.com/luthfimawahib-wq/stunting-determinant-reproducibility"
 repository-code: "https://github.com/luthfimawahib-wq/stunting-determinant-reproducibility"
 keywords:
