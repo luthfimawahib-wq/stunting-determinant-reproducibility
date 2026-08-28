@@ -35,6 +35,31 @@ CONFIG = dict(
         subsample=0.8, colsample_bytree=0.8, eval_metric="logloss",
         tree_method="hist", n_jobs=-1,
     ),
+
+
+    SPEC_BASE_PARAMS = dict(
+        n_estimators=300, max_depth=4, learning_rate=0.1,
+        subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0,
+        eval_metric="logloss", tree_method="hist", n_jobs=-1,
+        random_state=42, __scale_pos_weight__=True,
+    ),
+
+
+    SPEC_ARMS = {
+        "baseline":          {},
+        "shallow_depth2":    dict(max_depth=2),
+        "deep_depth6":       dict(max_depth=6),
+        "slow_learning":     dict(learning_rate=0.05, n_estimators=600),
+        "unweighted":        dict(__scale_pos_weight__=False),
+        "alt_seed":          dict(random_state=20260719),
+        "reestimation_spec": dict(n_estimators=400, learning_rate=0.05,
+                                  reg_lambda=0.0, __scale_pos_weight__=False),
+    },
+
+
+    SAVE_VECTORS = True,
+    VECTOR_DIR   = "output_p1/lantai_vektor",
+
     OUT_CSV = "output_p1/lantai_kebisingan_hasil.csv",
 )
 
@@ -51,7 +76,7 @@ def impute_once(X, seed):
         out = kernel.complete_data(dataset=0)
         return out
     except Exception as e:
-        print(f"    [peringatan] miceforest gagal ({type(e).__name__}: {e}); "
+        print(f"    [warning] miceforest failed ({type(e).__name__}: {e}); "
               f"memakai IterativeImputer sklearn (posterior sampling) sebagai cadangan.", flush=True)
         from sklearn.experimental import enable_iterative_imputer
         from sklearn.impute import IterativeImputer
@@ -60,9 +85,20 @@ def impute_once(X, seed):
         return pd.DataFrame(arr, columns=X.columns, index=X.index)
 
 
-def fit_model(Xc, y):
+def fit_model(Xc, y, override=None, base=None):
     from xgboost import XGBClassifier
-    m = XGBClassifier(**CONFIG["XGB_PARAMS"], random_state=CONFIG["RANDOM_STATE"])
+    params = dict(base if base is not None else CONFIG["XGB_PARAMS"])
+    params.setdefault("random_state", CONFIG["RANDOM_STATE"])
+    spw = params.pop("__scale_pos_weight__", False)
+    if override:
+        override = dict(override)
+        if "__scale_pos_weight__" in override:
+            spw = override.pop("__scale_pos_weight__")
+        params.update(override)
+    if spw:
+        n_pos = int(np.sum(np.asarray(y) == 1)); n_neg = int(np.sum(np.asarray(y) == 0))
+        params["scale_pos_weight"] = (n_neg / n_pos) if n_pos > 0 else 1.0
+    m = XGBClassifier(**params)
     m.fit(Xc, y)
     return m
 
@@ -107,13 +143,74 @@ def pairwise_spearman(vectors):
                 hi=float(np.percentile(rs, 97.5)), n_pairs=len(rs), n_items=len(keys))
 
 
+def save_vector(vec, label, jenis, ident):
+    if not CONFIG.get("SAVE_VECTORS", False):
+        return
+    import os
+    d = CONFIG["VECTOR_DIR"]; os.makedirs(d, exist_ok=True)
+    s = vec.copy()
+    if isinstance(s.index, pd.MultiIndex):
+        s.index = [f"{a}||{b}" for a, b in s.index]
+    s.rename("importance").to_frame().to_csv(f"{d}/{label}__{jenis}__{ident}.csv",
+                                             index_label="item")
+
+def pairwise_jaccard(vectors):
+    sets = [set(v.index) for v in vectors]
+    js = []
+    for a, b in combinations(range(len(sets)), 2):
+        u = sets[a] | sets[b]
+        js.append(len(sets[a] & sets[b]) / len(u) if u else np.nan)
+    if not js:
+        return dict(jacc_mean=np.nan, jacc_lo=np.nan, jacc_hi=np.nan)
+    js = np.array(js, dtype=float)
+    return dict(jacc_mean=float(np.nanmean(js)),
+                jacc_lo=float(np.nanpercentile(js, 2.5)),
+                jacc_hi=float(np.nanpercentile(js, 97.5)))
+
+def banding_dua(a, b):
+    A, B = set(a.index), set(b.index)
+    keys = sorted(A & B)
+    rho = np.nan
+    if len(keys) >= 3:
+        rho, _ = spearmanr(a.reindex(keys).values, b.reindex(keys).values)
+        rho = float(rho)
+    jac = len(A & B) / len(A | B) if (A | B) else np.nan
+    return rho, float(jac), len(keys)
+
+
+try:
+    import konfigurasi as K_UTAMA
+    import utilitas as U_UTAMA
+    PAKAI_PENYARINGAN_UTAMA = True
+except Exception as _e:
+    K_UTAMA = U_UTAMA = None
+    PAKAI_PENYARINGAN_UTAMA = False
+    print(f"[warning] konfigurasi.py/utilitas.py not importable ({_e}); "
+          "feature screening falls back to local rules and will NOT match the main analysis.")
+
+_CANDIDATE_FEATURES = None
+
+def global_candidate_features(df):
+    global _CANDIDATE_FEATURES
+    if _CANDIDATE_FEATURES is None:
+        _CANDIDATE_FEATURES = U_UTAMA.kolom_fitur(df)
+        print(f"    global candidate features: {len(_CANDIDATE_FEATURES)}")
+    return _CANDIDATE_FEATURES
+
 def load_cell(df, source_val, cohort_val):
     m = (df[CONFIG["SOURCE_COL"]].astype(str).str.lower() == str(source_val).lower()) &        (df[CONFIG["COHORT_COL"]].astype(str).str.lower() == str(cohort_val).lower())
     sub = df.loc[m].copy()
     sub = sub[sub[CONFIG["OUTCOME_COL"]].notna()]
     y = pd.to_numeric(sub[CONFIG["OUTCOME_COL"]], errors="coerce").astype(int).values
-    drop = set(CONFIG["EXCLUDE_COLS"]) | {CONFIG["SOURCE_COL"], CONFIG["COHORT_COL"], CONFIG["OUTCOME_COL"]}
-    feat = [c for c in sub.columns if c not in drop]
+    if PAKAI_PENYARINGAN_UTAMA:
+
+
+        kandidat = [c for c in global_candidate_features(df) if c in sub.columns]
+        df_obs = U_UTAMA.tutup_balik_teramati(sub, kandidat)
+        feat, _cak = U_UTAMA.pilih_fitur_terisi(df_obs, kandidat)
+    else:
+        drop = set(CONFIG["EXCLUDE_COLS"]) | {CONFIG["SOURCE_COL"], CONFIG["COHORT_COL"], CONFIG["OUTCOME_COL"]}
+        feat = [c for c in sub.columns if c not in drop]
 
     X = sub[feat].dropna(axis=1, how="all").copy()
 
@@ -132,9 +229,10 @@ def load_cell(df, source_val, cohort_val):
     return X, y
 
 def run_cell(df, source_val, cohort_val, label):
-    print(f"\n=== SEL {label}  (source={source_val}, cohort={cohort_val}) ===", flush=True)
+    print(f"\n=== CELL {label} (source={source_val}, cohort={cohort_val}) ===", flush=True)
     X, y = load_cell(df, source_val, cohort_val)
-    print(f"    n={len(X)}, fitur kandidat={X.shape[1]}, prevalensi={y.mean():.4f}", flush=True)
+    _source = "main-analysis screening" if PAKAI_PENYARINGAN_UTAMA else "aturan lokal"
+    print(f"    n={len(X)}, features={X.shape[1]} ({_source}), prevalence={y.mean():.4f}", flush=True)
 
 
     me_vecs, ix_vecs = [], []
@@ -146,7 +244,9 @@ def run_cell(df, source_val, cohort_val, label):
         ix_vecs.append(interaction_vector(model, Xc, seed=base_seed,
                                           subN=CONFIG["SUBSAMPLE_N"],
                                           top_pairs=CONFIG["TOP_PAIRS"]))
-        print(f"    [imputasi draw {d+1}/{CONFIG['N_IMPUTATIONS']}] selesai", flush=True)
+        save_vector(me_vecs[-1], label, "imputasi_main_effect", f"draw{d+1}")
+        save_vector(ix_vecs[-1], label, "imputasi_interaction", f"draw{d+1}")
+        print(f"    imputation draw {d+1}/{CONFIG['N_IMPUTATIONS']}", flush=True)
     floor_imp_me = pairwise_spearman(me_vecs)
     floor_imp_ix = pairwise_spearman(ix_vecs)
 
@@ -158,10 +258,57 @@ def run_cell(df, source_val, cohort_val, label):
         seed_vecs.append(interaction_vector(model0, Xc0, seed=base_seed + 1000 + s,
                                             subN=CONFIG["SUBSAMPLE_N"],
                                             top_pairs=CONFIG["TOP_PAIRS"]))
-        print(f"    [benih subsampel {s+1}/{CONFIG['N_SUBSAMPLE_SEEDS']}] selesai", flush=True)
+        save_vector(seed_vecs[-1], label, "benih_interaction", f"seed{s+1}")
+        print(f"    subsample seed {s+1}/{CONFIG['N_SUBSAMPLE_SEEDS']}", flush=True)
     floor_sub_ix = pairwise_spearman(seed_vecs)
 
-    return ([
+
+    spec_me, spec_ix, spec_names = [], [], []
+    arms = CONFIG.get("SPEC_ARMS", {})
+    for k, (name, ov) in enumerate(arms.items()):
+        m_spec = fit_model(Xc0, y, override=ov, base=CONFIG.get("SPEC_BASE_PARAMS"))
+        v_me = main_effect_vector(m_spec, Xc0)
+        v_ix = interaction_vector(m_spec, Xc0, seed=base_seed,
+                                  subN=CONFIG["SUBSAMPLE_N"],
+                                  top_pairs=CONFIG["TOP_PAIRS"])
+        spec_me.append(v_me); spec_ix.append(v_ix); spec_names.append(name)
+        save_vector(v_me, label, "spec_main_effect", name)
+        save_vector(v_ix, label, "spec_interaction", name)
+        print(f"    specification {k+1}/{len(arms)}: {name}", flush=True)
+    kosong = dict(mean=np.nan, lo=np.nan, hi=np.nan, n_pairs=0, n_items=0)
+    floor_spec_me = pairwise_spearman(spec_me) if len(spec_me) > 1 else dict(kosong)
+    floor_spec_ix = pairwise_spearman(spec_ix) if len(spec_ix) > 1 else dict(kosong)
+    if len(spec_ix) > 1:
+        floor_spec_ix.update(pairwise_jaccard(spec_ix))
+
+
+    arm_rows = []
+    if spec_names:
+        i0 = spec_names.index("baseline") if "baseline" in spec_names else 0
+        for k, name in enumerate(spec_names):
+            if k == i0:
+                continue
+            r_me, j_me, ni_me = banding_dua(spec_me[i0], spec_me[k])
+            r_ix, j_ix, ni_ix = banding_dua(spec_ix[i0], spec_ix[k])
+            arm_rows.append(dict(sel=label, layer="main_effect",
+                                     floor_type="spec_vs_baseline", arm=name,
+                                     mean=r_me, lo=np.nan, hi=np.nan,
+                                     n_items=ni_me, n_pairs=1))
+            arm_rows.append(dict(sel=label, layer="interaction",
+                                     floor_type="spec_vs_baseline", arm=name,
+                                     mean=r_ix, lo=np.nan, hi=np.nan,
+                                     n_items=ni_ix, n_pairs=1, jacc_mean=j_ix))
+
+    if len(ix_vecs) > 1:
+        floor_imp_ix.update(pairwise_jaccard(ix_vecs))
+    if len(seed_vecs) > 1:
+        floor_sub_ix.update(pairwise_jaccard(seed_vecs))
+
+    return (arm_rows + [
+        dict(sel=label, layer="main_effect", floor_type="model_spec_sensitivity",
+             arm="ALL_ARMS", **floor_spec_me),
+        dict(sel=label, layer="interaction", floor_type="model_spec_sensitivity",
+             arm="ALL_ARMS", **floor_spec_ix),
         dict(sel=label, layer="main_effect", floor_type="imputation",
              **floor_imp_me),
         dict(sel=label, layer="interaction", floor_type="imputation",
@@ -172,8 +319,7 @@ def run_cell(df, source_val, cohort_val, label):
 
 def resolve_schema(df):
     cols = list(df.columns)
-    print(f"    Parquet shape: {df.shape}", flush=True)
-    print(f"    Kolom (semua {len(cols)}): {cols}", flush=True)
+    print(f"    parquet: {df.shape[0]} rows, {df.shape[1]} columns", flush=True)
 
     def col_with_values(target_vals):
 
@@ -193,10 +339,10 @@ def resolve_schema(df):
         set(df[source_col].astype(str).str.lower().unique()) & src_vals):
         source_col = col_with_values(src_vals)
     if source_col is None:
-        raise SystemExit("Tidak menemukan kolom sumber (nilai ssgi22/ssgi24/ski23). "
-                         "Set CONFIG['SOURCE_COL'] manual dari daftar kolom di atas.")
+        raise SystemExit("Source column not found (expected ssgi22/ssgi24/ski23). "
+                         "Set CONFIG['SOURCE_COL'] manually.")
     CONFIG["SOURCE_COL"] = source_col
-    print(f"    -> kolom sumber : '{source_col}' | nilai={sorted(set(df[source_col].astype(str).unique()))[:8]}", flush=True)
+    print(f"    source column : {source_col}", flush=True)
 
 
     coh_vals = {"baduta", "balita_tua"}
@@ -217,15 +363,15 @@ def resolve_schema(df):
                     if pd.notna(mx) and mx <= 72:
                         age_col = c; break
         if age_col is None:
-            raise SystemExit("Tidak menemukan kolom kohort (baduta/balita_tua) maupun kolom umur "
-                             "untuk menurunkannya. Set CONFIG['COHORT_COL'] manual.")
+            raise SystemExit("Neither a cohort column (baduta/balita_tua) nor an age column was found. "
+                             "Set CONFIG['COHORT_COL'] manually.")
         age = pd.to_numeric(df[age_col], errors="coerce")
         df = df.copy()
         df["cohort"] = np.where(age < 24, "baduta", np.where(age <= 59, "balita_tua", np.nan))
         cohort_col = "cohort"
-        print(f"    -> kohort diturunkan dari umur '{age_col}' (<24=baduta, 24-59=balita_tua)", flush=True)
+        print(f"    cohort derived from age column {age_col}", flush=True)
     CONFIG["COHORT_COL"] = cohort_col
-    print(f"    -> kolom kohort : '{cohort_col}' | nilai={sorted(set(df[cohort_col].dropna().astype(str).unique()))[:8]}", flush=True)
+    print(f"    cohort column : {cohort_col}", flush=True)
 
 
     if CONFIG["OUTCOME_COL"] not in df.columns:
@@ -239,20 +385,20 @@ def resolve_schema(df):
                 if cand in df.columns:
                     haz = cand; break
             if haz is None:
-                raise SystemExit("Tidak menemukan kolom outcome stunting maupun HAZ. "
-                                 "Set CONFIG['OUTCOME_COL'] manual.")
+                raise SystemExit("Neither a stunting outcome column nor a HAZ column was found. "
+                                 "Set CONFIG['OUTCOME_COL'] manually.")
             df = df.copy()
             df["stunting_binary"] = (pd.to_numeric(df[haz], errors="coerce") < -2).astype(int)
             found = "stunting_binary"
-            print(f"    -> outcome diturunkan dari '{haz}' (< -2 SD)", flush=True)
+            print(f"    outcome derived from {haz} (< -2 SD)", flush=True)
         CONFIG["OUTCOME_COL"] = found
-    print(f"    -> kolom outcome: '{CONFIG['OUTCOME_COL']}'", flush=True)
+    print(f"    outcome column: {CONFIG['OUTCOME_COL']}", flush=True)
     return df
 
 
 def main():
     import os
-    print("Memuat parquet:", CONFIG["PARQUET_PATH"], flush=True)
+    print("Loading parquet:", CONFIG["PARQUET_PATH"], flush=True)
     df = pd.read_parquet(CONFIG["PARQUET_PATH"])
     df = resolve_schema(df)
     cells = [
@@ -287,9 +433,11 @@ def main():
     res.to_csv(CONFIG["OUT_CSV"], index=False)
 
     pd.set_option("display.width", 160)
-    print("\n========== LANTAI KEBISINGAN vs LINTAS-GELOMBANG (Spearman) ==========")
-    print(res[["sel","layer","floor_type","mean","lo","hi","n_items","n_pairs"]].round(3).to_string(index=False))
-    print(f"\nDisimpan ke: {CONFIG['OUT_CSV']}")
+    print("\n========== NOISE FLOOR AND SPECIFICATION SENSITIVITY (Spearman) ==========")
+    kol = ["sel","layer","floor_type","arm","mean","lo","hi","jacc_mean","n_items","n_pairs"]
+    kol = [c for c in kol if c in res.columns]
+    print(res[kol].round(3).to_string(index=False))
+    print(f"\nWritten to: {CONFIG['OUT_CSV']}")
 
 if __name__ == "__main__":
     main()
