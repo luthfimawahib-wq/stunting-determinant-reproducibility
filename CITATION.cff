@@ -1,14 +1,14 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
-title: "Reproducibility of Stunting Determinant Rankings Across Age Cohorts and National Survey Waves"
+title: "Reproducibility of Model-Derived Predictor Importance Rankings for Childhood Stunting Across Age Cohorts and National Survey Waves"
 type: software
 authors:
   - family-names: "Fimawahib"
     given-names: "Luth"
     affiliation: "Universitas Negeri Yogyakarta"
     orcid: "https://orcid.org/0000-0002-4271-7347"
-version: "1.0.0"
-date-released: "2026-08-16"
+version: "1.2.0"
+date-released: "2026-08-31"
 license: MIT
 identifiers:
   - type: doi
