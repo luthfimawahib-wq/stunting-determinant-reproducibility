@@ -37,7 +37,7 @@ a derivative of that microdata and is never committed to this repository.
 ## Source dataset and analyzed population
 
 The harmonized master dataset holds **721,385 records** from three national
-sources. This study analyzes the two SSGI waves only:
+sources (SSGI 2022, SSGI 2024, and SKI 2023). This study analyzes the two SSGI waves only:
 
 ```
 harmonized master                                721,385 records
@@ -57,7 +57,7 @@ harmonized master                                721,385 records
               +-- D  SSGI 2022, 24-59 months      210,076
 ```
 
-SKI 2023 is outside the two-wave design of this study and is never loaded by
+SKI (Indonesian Health Survey) 2023 is outside the two-wave design of this study and is never loaded by
 this pipeline. Of the 635,021 SSGI records, 1,283 have no observed stunting
 outcome; these are dropped where the instrument is fitted, in
 `tahap3_interaksi.py`, and `n_latih` in each `<cell>/model_meta.json` records the
